@@ -176,6 +176,71 @@ def compute_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     return _dot(vec_a, vec_b) / (mag_a * mag_b)
 
 
+class HeaderAwareChunker:
+    """
+    Chunk text by Markdown headings first, then sub-split by RecursiveChunker
+    if a section exceeds chunk_size.
+
+    Rules:
+        - Detect heading lines starting with one or more '#' characters.
+        - Each heading starts a new section; the heading text is prepended to
+          every sub-chunk produced from that section so context is preserved.
+        - Sections shorter than chunk_size are returned as a single chunk.
+        - Sections longer than chunk_size are passed to RecursiveChunker.
+    """
+
+    def __init__(self, chunk_size: int = 900) -> None:
+        self.chunk_size = chunk_size
+        self._recursive = RecursiveChunker(chunk_size=chunk_size)
+
+    def chunk(self, text: str) -> list[str]:
+        if not text:
+            return []
+
+        lines = text.splitlines(keepends=True)
+        sections: list[tuple[str, list[str]]] = []  # (heading_line, body_lines)
+        current_heading = ""
+        current_body: list[str] = []
+
+        for line in lines:
+            # Detect ATX headings: ## Title, ### Title, etc.
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                # Save previous section
+                if current_body or current_heading:
+                    sections.append((current_heading, current_body))
+                current_heading = stripped.rstrip("\n\r")
+                current_body = []
+            else:
+                current_body.append(line)
+
+        # Don't forget the last section
+        if current_body or current_heading:
+            sections.append((current_heading, current_body))
+
+        chunks: list[str] = []
+        for heading, body_lines in sections:
+            body = "".join(body_lines).strip()
+            if not body and not heading:
+                continue
+
+            # Full section text (heading + body)
+            section_text = (f"{heading}\n{body}" if heading and body else heading or body).strip()
+
+            if len(section_text) <= self.chunk_size:
+                if section_text:
+                    chunks.append(section_text)
+            else:
+                # Sub-split the body; prepend heading to every sub-chunk
+                sub_chunks = self._recursive.chunk(body if body else section_text)
+                for sub in sub_chunks:
+                    if sub.strip():
+                        chunk_with_ctx = (f"{heading}\n{sub.strip()}" if heading else sub.strip())
+                        chunks.append(chunk_with_ctx)
+
+        return chunks
+
+
 class ChunkingStrategyComparator:
     """Run all built-in chunking strategies and compare their results."""
 
